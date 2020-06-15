@@ -1,0 +1,670 @@
+---
+title: |
+  | How often do accidents occur at the 
+  | Rio - Niterói bridge?
+subtitle: "With this data and a little of statistics we will seek answers to this and other questions"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_depth: 2
+    number_sections: true
+---
+
+Project author:
+
+* [Fellipe Gomes](https://github.com/gomesfellipe) (Statistics - UFF, Data Scientist - FGV IBRE / BRAZIL)
+
+Based on my blog post at: </br>
+<https://gomesfellipe.github.io/post/2018-09-29-freq-acidente-ponte-rio-niteroi.md/freq-acidente-ponte-rio-niteroi/>
+
+Republication in the medium for [ENSINA.AI](https://medium.com/ensina-ai): </br> <https://medium.com/ensina-ai/com-que-frequ%C3%AAncia-ocorrem-acidentes-na-ponte-rio-niter%C3%B3i-58d7f779c6d0>
+
+<p align="right"><span style="color:firebrick">Dont forget the upvote if you liked the kernel!  🤘 </span> </p>
+
+# Initial questions
+
+Studying in another city has its advantages and disadvantages, during the entire graduation I crossed Guanabara Bay by the Presidente Costa e Silva Bridge (popularly known as Rio – Niterói Bridge) as well as all the people who make this journey daily and in front of so much natural beauty with the panoramic view of the bay as the spectacles provided by the sunset, the birds or the undeniable beauty of the *Pão de Açucar* ("Sugarloaf"), the beauty resulting from the greatest human skill is also remarkable: **creativity**. We have Christ, all those big boats, the Port of Rio de Janeiro with all those Engineering works, or even the Bridge, which in itself is already intriguing.
+
+On the other hand, among the disadvantages is the huge frequency of traffic jams, the cost, the time spent on the route and when reflecting on the speed of the cars crossing the bridge and the number of accidents that occur in the area, I came across the following questions:
+
+* Is the number of accidents on the bridge daily?
+* Have the number of accidents on the bridge decreased?
+* Has the installation of security cameras reduced the number of accidents?
+
+In January 2018 it was announced in the newspaper: "radars on the Rio-Niterói Bridge start to fine" and as the bridge has been monitored with security cameras for some time now, the suspicion arises if the number of accidents has decreased and the will to drawing my own conclusions i resorted to what is most abundant out there: the data and with the use of simple statistics techniques i started my "investigation" to get possible answers to these questions.
+
+# Dependencies
+
+Packages used in this analysis:
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning=F, fig.width=12, message=F,
+                      warning=F, highlight=F, knitr.table.format = "html")
+
+library(tidyverse)      # load all tidyverse
+library(broom)          # augment, tidy, glance
+library(grid)           # textGrob()
+library(gridExtra)      # + ggplot2
+library(lubridate)      # manipulate date 
+library(leaflet)        # maps
+library(leaflet.extras) # + leaflet
+library(forecast)       # tslm()
+library(zoo)            # rollmean()
+library(knitr)          # kable()
+library(kableExtra)     # scroll_box
+library(formattable)    # color_bar()
+
+runs.test <- function (x, alternative = "two.sided", threshold = median(x), 
+  pvalue = "normal", plot = FALSE) 
+{
+  dname <- deparse(substitute(x))
+  if (alternative == "t") {
+    alternative <- "two.sided"
+  }
+  if (alternative == "l") {
+    alternative <- "left.sided"
+  }
+  if (alternative == "r") {
+    alternative <- "right.sided"
+  }
+  if (alternative != "two.sided" & alternative != "left.sided" & 
+    alternative != "right.sided") {
+    stop("must give a valid alternative")
+  }
+  x <- na.omit(x)
+  stopifnot(is.numeric(x))
+  x <- x[x != threshold]
+  s <- sign(x - threshold)
+  n1 <- length(s[s > 0])
+  n2 <- length(s[s < 0])
+  runs <- rle(s)
+  r1 <- length(runs$lengths[runs$values == 1])
+  r2 <- length(runs$lengths[runs$values == -1])
+  n <- n1 + n2
+  mu <- 1 + 2 * n1 * n2/(n1 + n2)
+  vr <- 2 * n1 * n2 * (2 * n1 * n2 - n1 - n2)/(n^2 * (n - 
+    1))
+  rr <- r1 + r2
+  if (plot) {
+    plot((1:n)[s > 0], x[s > 0], xlim = c(1, n), ylim = c(min(x), 
+      max(x)), xlab = "", ylab = dname)
+    points((1:n)[s < 0], x[s < 0], col = "red")
+    abline(h = threshold, col = gray(0.4))
+    for (i in 1:(n - 1)) {
+      if (s[i] * s[i + 1] < 0) {
+        abline(v = i + 0.5, lty = 2)
+      }
+    }
+  }
+  pv <- 0
+  if (pvalue == "exact") {
+    if (alternative == "two.sided") {
+      pv1 <- sum(druns(1:rr, n1, n2))
+      pv2 <- sum(druns(rr:(n1 + n2), n1, n2))
+      pv <- 2 * min(pv1, pv2)
+    }
+    if (alternative == "left.sided") {
+      pv <- sum(druns(2:rr, n1, n2))
+    }
+    if (alternative == "right.sided") {
+      pv <- sum(druns(rr:(n1 + n2), n1, n2))
+    }
+  }
+  if (pvalue == "normal") {
+    pv0 <- pnorm((rr - mu)/sqrt(vr))
+    if (alternative == "two.sided") {
+      pv <- 2 * min(pv0, 1 - pv0)
+    }
+    if (alternative == "left.sided") {
+      pv <- pv0
+    }
+    if (alternative == "right.sided") {
+      pv <- 1 - pv0
+    }
+  }
+  if (alternative == "two.sided") {
+    alternative <- "nonrandomness"
+  }
+  if (alternative == "left.sided") {
+    alternative <- "trend"
+  }
+  if (alternative == "right.sided") {
+    alternative <- "first-order negative autocorrelation"
+  }
+  rval <- list(statistic = c(statistic = (rr - mu)/sqrt(vr)), 
+    p.value = pv, runs = rr, mu = mu, var = vr, method = "Runs Test", 
+    data.name = dname, parameter = c(runs = rr, n1 = n1, 
+      n2 = n2, n = n), alternative = alternative)
+  class(rval) <- "htest"
+  return(rval)
+}
+
+```
+
+```{r, eval = F}
+library(tidyverse)      # load all tidyverse
+library(broom)          # augment, tidy, glance
+library(grid)           # textGrob()
+library(gridExtra)      # + ggplot2
+library(lubridate)      # manipulate date 
+library(leaflet)        # maps
+library(leaflet.extras) # + leaflet
+library(forecast)       # tslm()
+library(zoo)            # rollmean()
+library(knitr)          # kable()
+library(kableExtra)     # scroll_box
+library(formattable)    # color_bar()
+
+theme_set(theme_bw())
+```
+
+# Data source
+
+The data used in the research were obtained from the website of the Federal Highway Police, which provides an Open Data session which, according to the website: “has no restrictions on licenses, patents or control mechanisms, so that they are freely available to be used and redistributed to will".
+
+**Discussion**: To know the number of accidents on the Rio-Niterói bridge occurs even daily, it would be necessary for all cases to be registered. It is possible that underreporting occurs because in some cases, such as a light crash between two cars, it is not registered with the PRF (federal highway police).
+
+**Reflection**: A suggestion to get around this underreporting problem (if any) could be the development of a Deep Learning algorithm to capture the occurrence of accidents through images from security cameras, classify them and store them in a database in an automated way in addition to notifying the authorities..
+
+Remembering that a filter was made to obtain only the data from the Rio - Niterói bridge. For that, I searched Google to know the “address” of the bridge, which is BR-101, Km 321-334.
+
+Importing data and nest it for years:
+
+```{r}
+base <- read_csv("accidents-rio-niteroi-bridge.csv", 
+         col_types = cols(
+           .default = col_character(),
+           id = col_double(),
+           data_inversa = col_date(format = ""),
+           horario = col_time(format = ""),
+           br = col_double(),
+           km = col_double(),
+           ano = col_double(),
+           pessoas = col_double(),
+           mortos = col_double(),
+           feridos_leves = col_double(),
+           feridos_graves = col_double(),
+           ilesos = col_double(),
+           ignorados = col_double(),
+           feridos = col_double(),
+           veiculos = col_double(),
+           latitude = col_double(),
+           longitude = col_double(),
+           regional = col_character(),
+           delegacia = col_character(),
+           uop = col_character()
+         ))
+```
+
+# Exploratory data analysis
+
+First, a brief summary of the data with some general information
+
+Categorical
+
+```{r}
+base %>% 
+  select(dia_semana, classificacao_acidente, condicao_metereologica, mortos, feridos, veiculos) %>% 
+  mutate_all(as.factor) %>% 
+  DataExplorer::plot_bar(ggtheme = theme_bw())
+```
+
+Note that the highest number of accidents occurs on Friday, practically all accidents had no deaths and in `r round(sum(base$mortos==0) / nrow(base) * 100, 2)`% of accidents there were no victims. Most of the accidents were collisions between two cars.
+
+The types of accidents that occurred were:
+
+```{r}
+base %>% 
+  select(causa_acidente, tipo_acidente) %>%
+  map_if(is.character,as.factor) %>% 
+  as_tibble %>% 
+  group_by(causa_acidente) %>% 
+  dplyr::summarise(n=n()) %>% 
+  kable(escape = F) %>%
+  kable_styling("hover") %>%
+  scroll_box( height = "200px")
+```
+
+## Geospatial analysis
+
+When investigating the base it is noted that only the last years (2017-2020) inform the geographic coordinates, so to create the map with the leaflet package, only the data for the year 2017+ were selected:
+
+```{r,out.width=850}
+base %>% 
+  filter(ano >= 2017) %>% 
+  select(id, data_inversa, horario, br,km,
+         causa_acidente, tipo_acidente,
+         latitude, longitude) %>%  
+  mutate(latitude = as.numeric(latitude), 
+         longitude = as.numeric(longitude)) %>% 
+  leaflet() %>%
+  addTiles() %>%
+  addMarkers(~longitude, ~latitude,
+             clusterOptions = markerClusterOptions(),
+             label = ~paste0(data_inversa,"-",horario,"\n Causa: ",
+                             causa_acidente,"\nTipo: ",tipo_acidente))%>%
+  addResetMapButton()%>% 
+  addProviderTiles(providers$OpenStreetMap.Mapnik)
+```
+
+Note that there are several occurrences that presented geographical coordinates outside the limits of the Bridge, which suggests that the selected sample may contain information from the surroundings. This information will be evaluated together with the data for the 13km of BR-101 we selected.
+
+
+## Time series analysis
+
+According to [Morettin and Toloi (2004)](https://impa.br/wp-content/uploads/2017/04/13_CBM_81_01.pdf):
+
+> A time series is any set of observations ordered in time
+
+The objectives of time series analysis are, in general:
+
+* Investigate the generating mechanism of the time series
+* Predict future series values (may be short term or long term)
+* Describing only the behavior of the series, in this case the construction of the graph, the verification of the existence of trends, cycles and seasonal variations, the construction of histograms and dispersion diagrams etc. can be useful tools
+* Search for relevant periodicity in the data
+
+Etymologically (prae and videre), the word prediction suggests that you want to see something before it exists. Some authors prefer the word **prediction**, to indicate something that should exist in the future. Still others use the term projection but our goal in this post will not be to adjust a predictive model, but rather a **descriptive** model that makes it possible to study the behavior of the series.
+
+### Number of accidents by day for the last 10 years
+
+See below the number of accidents, by `id`, daily and two curves of moving averages with `k = 30` and with `k = 30*6`:
+
+```{r}
+g1 <- 
+  base %>%
+  select(id, data_inversa, causa_acidente, tipo_acidente)  %>% 
+  dplyr::group_by(data_inversa)%>% 
+  dplyr::summarise(n=n())%>%
+  mutate(rMM=rollmean(n,30, na.pad=TRUE, align="left")) %>%
+  mutate(rMY=rollmean(n,30*6, na.pad=TRUE, align="left")) %>%
+  tidyr::gather(medida,valor,n:rMY) %>% 
+  ggplot(aes(x=data_inversa, y=valor,col=medida)) +
+  geom_line() +
+  scale_colour_manual(name="Legend:",values=c("black","red","blue"), 
+                      labels = c('Accident','moving average k=30', 'moving averages k=30*6')) +
+  theme_bw() +
+  labs(y= 'Number of accidents',
+       x = 'Date',
+       subtitle = "By day", 
+       title= 'Number of accidents on the Ponte Rio-Niterói', 
+       caption = "Data source:\nhttps://www.prf.gov.br/portal/dados-abertos/acidentes\nhttps://gomesfellipe.github.io/",col="") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(breaks=seq(0,15,1))
+
+g1 +
+  scale_x_date(date_breaks = '6 months',limits = as.Date(c("2007-02-01","2020-12-01")),
+               expand = c(0.01,0.01)) + 
+  theme(legend.position = c(0.85,0.7), 
+        legend.background = element_rect(fill=alpha('lightgrey', 0.2)))
+```
+
+This chart has a lot of information, taking into account the number of accidents by day and even so it is already possible to notice some information such as:
+
+* There are several days that there were no accidents registered by the PRF (several points touch the x axis)
+* In 2015 there was a grotesque decrease in the number of accidents recorded (what happened?)
+* The first question was answered, the number of accidents does not appear to have been daily in the last 10 years according to these data (and assuming there was no underreporting).
+
+The hypothesis raised with the second question, on the other hand, seems to be true since the behavior of the data suggests that there has been a decrease in the number of accidents.
+
+Here is another quick exploratory analysis to check how the number of accidents is distributed over the years and months with some box-plots:
+
+```{r,fig.show=F}
+bp1 <- 
+  base %>%
+  select(id, data_inversa, causa_acidente, tipo_acidente)  %>% 
+  dplyr::group_by(data_inversa)%>% 
+  dplyr::summarise(n=n()) %>%
+  tidyr::gather(medida,valor,n) %>% 
+  ggplot(aes(x=factor(year(data_inversa)), y=valor,col=medida)) +
+  geom_jitter(col="darkgrey",alpha=0.3)+
+  geom_boxplot(col="black",alpha=0.3)+
+  theme_bw() +
+  labs(y= 'Number of accidents',x="") + 
+  theme(axis.text.x = element_text(angle = 30, hjust = 1)) +
+  scale_y_continuous(breaks=seq(0,15,1))+ 
+  geom_vline(xintercept = 8.5, linetype="dotted", 
+             color = "red", size=1.5) +
+  annotate("label",y = 7, x = 8.5,
+           label = "different \n     behavior",
+           size = 4, colour = "red",hjust=0.1)
+
+bp2 <- 
+  base %>%
+  select(id, data_inversa, causa_acidente, tipo_acidente) %>% 
+  filter(year(data_inversa)<2016) %>% 
+  dplyr::group_by(data_inversa) %>% 
+  dplyr::summarise(n=n()) %>%
+  tidyr::gather(medida,valor,n) %>% 
+  ggplot(aes(x=factor(months(data_inversa),
+                      levels = months(base$data_inversa) %>% unique),
+             y=valor,col=medida)) +
+  geom_jitter(col="darkgrey",alpha=0.3)+
+  geom_boxplot(color="black",alpha=0.3)+
+  theme_bw() +
+  labs(y= 'Number of accidents',
+       title = 'Data 2008-2015',x="", col="") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(breaks=seq(0,15,1))+ 
+  theme(legend.position = c(0.85,0.7))
+
+bp3 <- 
+  base %>%
+  select(id, data_inversa, causa_acidente, tipo_acidente) %>% 
+  filter(year(data_inversa)>=2016) %>% 
+  dplyr::group_by(data_inversa) %>% 
+  dplyr::summarise(n=n()) %>%
+  tidyr::gather(medida,valor,n) %>% 
+  ggplot(aes(x=factor(months(data_inversa),
+                      levels = months(base$data_inversa) %>% unique),
+             y=valor,col=medida)) +
+  geom_jitter(col="darkgrey",alpha=0.3)+
+  geom_boxplot(color="black",alpha=0.3)+
+  theme_bw() +
+  labs(y= '',
+       title = 'Data 2016 -2020',x="",col="") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(breaks=seq(0,15,1))+ 
+  theme(legend.position = c(0.85,0.7))
+
+bp2 <- arrangeGrob(bp2,bp3,ncol=2)
+```
+
+```{r,fig.height=10}
+grid.arrange(bp1,bp2,
+             top = "Boxplots of the number of accidents on the Rio-Niterói Bridge",
+             bottom = textGrob("Data source:\nhttps://www.prf.gov.br/portal/dados-abertos/acidentes\nhttps://gomesfellipe.github.io/",
+                               gp = gpar(fontface = 3, fontsize = 9),
+                               hjust = 1,x = 1 )) 
+
+```
+
+It is possible to note that before 2016 all boxplots had similar medians, whereas after 2016 there seems to be more accidents only in the first months of the year.
+
+To answer the last question we will analyze the series in more detail to better understand its behavior.
+
+### Number of accidents per day in the last 10 years grouped by year
+
+See the same information on the graph of the number of accidents on the Rio-Niterói Bridge by day, but separated for each year:
+
+```{r,fig.height=9}
+g1 +
+  facet_wrap( ~ year(data_inversa), scales = "free_x") +
+  ggtitle("Number of accidents on the Rio-Niterói Bridge according to the year, by day") +
+  scale_x_date(date_breaks = '1 month') +
+  theme(legend.position = c(0.85, 0.1))
+```
+
+It is now evident that as of 2015, the number of accidents on the Rio-Niterói Bridge has been reduced and remained below the average number recorded in previous years.
+
+### But what happened in 2015?
+
+Since there was such a sudden behavior in 2015, I decided to search Google for news of accidents on the Rio-Niterói Bridge in this period and in a brief survey I came across the following news:
+
+![](https://gomesfellipe.github.io/img/2018-09-29-freq-acidente-ponte-rio-niteroi/noticia.png)
+
+This statement in the headline, that there was "a reduction of almost 60% after video monitoring" is intriguing and it would be interesting to be able to find some concordant result.
+
+In the news ["Monitoring with cameras helps to reduce accidents at the Rio-Niterói Bridge](http://g1.globo.com/rio-de-janeiro/noticia/2015/11/monitoramento-com-cameras-ajuda-reduzir-acidentes-na-ponte-rio-niteroi.html)" a PRF inspector makes the following statement:
+
+> “(…) It helps to amplify our power to visualize the infractions that are committed. Conceptually it reduces the number of accidents due to the presence almost everywhere, at the same time, of the PRF ”
+
+### Number of accidents per month in the last 10 grouped years
+
+As the graph was loaded when taking into account the number of accidents over the days, the same information will be grouped by month.
+
+Let's see visually the data provided by the PRF and the day the news was updated:
+
+```{r}
+g2 <- 
+  base %>%
+  select(id, data_inversa, causa_acidente, tipo_acidente) %>%
+           mutate_if(is.character,~ dmy(.x) ) %>%
+  group_by(month=floor_date(data_inversa, "1 month")) %>% 
+  summarise(n = n()) %>%  
+  ggplot(aes(x=month, y=n)) +
+  geom_line() +
+  geom_point() +
+  theme_bw() + 
+  labs(y= 'Number of accidents',
+       x = 'Date',
+       title= 'Number of accidents on the Rio-Niterói Bridge', 
+       subtitle = "By month", 
+       caption = "Data source: \nhttp://glo.bo/210j8gF \nhttps://www.prf.gov.br/portal/dados-abertos/acidentes\nhttps://gomesfellipe.github.io/") +
+  scale_y_continuous(breaks=seq(0,150,25))
+
+g2 +
+  geom_segment(x = as.Date("2015-11-13"), xend = as.Date("2015-11-13"),
+               y=0,yend=100, linetype="dashed", col="red") +
+  geom_text(aes(y = 100, x = as.Date("2015-11-13"),
+                label = "G1 in 17/11/2015 :\n\"Monitoring with cameras\n helps to reduce accidents\n  at the Rio-Niterói Bridge\"") ,hjust=-0.1) +
+  scale_x_date(date_breaks = '6 month') + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+In fact, it is visually possible to notice an apparent decrease in the year in which the news was released, but is it possible to identify some type of trend from these data?
+
+### Number of accidents per month in the last 10 years grouped by year
+
+Let's see below the separate chart for each year to compare the behavior of the data:
+
+```{r,fig.height=9}
+g2 +
+  # geom_smooth(method = "lm", se = F, aes(col = "blue")) +
+  facet_wrap( ~ year(month), scales = "free_x") +
+  scale_colour_manual(name=" ", values=c("blue"),labels=c("Linear Regression")) + 
+  theme(legend.position = c(0.88,0.20))
+```
+
+In this graph we see that from 2008 to 2014 the data behave in a similar way around 100 to 75 accidents. However, in 2015 the number of accidents ends at around 25 and this number has been maintained over the years.
+
+### Description model adjustment
+
+To better understand this trend presented in 2015, a simple linear regression model will be adjusted according to the methodology presented in (2016), which use time as an explanatory variable and understand the variation in the number of average accidents per month.
+
+The method used to assess the trend consists of adjusting the trend as a function of time $(t)$ with a linear regression model so that:
+
+$$
+Y_{i} = \beta_0 + \beta_1 t_i + \epsilon_{i}
+$$
+
+on what:
+
+* $Y_{i}$: Trend in the number of average accidents per month at the moment
+* $t_i$: i-th moment of time
+* $\beta_0$: Model intercept (value of $Y_i$ when $t_i=0$)
+* $\beta_1$: Slope of the adjusted line (effect of the variable $t_i$)
+* $\epsilon_i \sim N(0,\sigma^2)$ where $\sigma^2$ is constant
+ 
+This linear regression model measures the trend variation for different time interval values in the range of interest. The adjustment is interpreted according to the slope of the line formed by the different reference values in relation to the respective trend, it may not be the best method for the forecast, but it can help to understand the behavior of the series as a descriptive analysis.
+
+```{r}
+to_lm <-  
+  base %>%
+  select(id, data_inversa, causa_acidente, tipo_acidente)%>%
+           mutate_if(is.character,~ dmy(.x) ) %>% 
+  group_by(data_inversa=floor_date(data_inversa, "1 month")) %>% 
+  summarise(n = n()) %>% 
+  filter(data_inversa >= "2015-01-01" & data_inversa < "2016-01-01")
+
+y   <- to_lm %$% n %>%  ts(start = c(2015, 01, 01))
+
+g2 +
+  geom_smooth(method='lm',se=F,aes(col=I("darkred"))) +
+  geom_smooth(data=to_lm, aes(x=data_inversa, y=n,col=I("blue")), method = "lm",se=F) +
+  scale_colour_manual(name=NULL, values=c("red","blue","darkred"),
+                      labels=c("Linear regression for 2015", 
+                               "Linear regression for all",
+                               "Notícia"  )) + 
+  theme(legend.position = c(0.2,0.18)) +
+  geom_segment(x = as.Date("2015-11-13"), xend = as.Date("2015-11-13"), 
+               y=0, yend=100, linetype="dashed", aes(col=I("red"))) + 
+  geom_text(aes(y = 100, x = as.Date("2015-11-13"),
+                label = "G1 in 17/11/2015 :\n\"Monitoring with cameras\n helps to reduce accidents\n  at the Rio-Niterói Bridge\"") ,hjust=-0.1) +
+  scale_x_date(date_breaks = '6 month') + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), 
+        legend.background = element_rect(fill=alpha('lightgrey', 0.2)))
+```
+
+Before checking the results of the model fit, see the result for the test of sequences (Wald-Wolfowitz) which has as an alternative hypothesis $H_1$: *there is a trend in the series*:
+
+```{r}
+randtests::runs.test(y)
+```
+
+At the level of significance of $\alpha:0.05$, the null hypothesis that this series does not present a trend in the selected period (2015) is rejected.
+
+Another important hypothesis to check is about the normality of the response variable, then the Shapiro-wilk test will be applied, which has as a null hypothesis that the data have a normal distribution:
+
+```{r}
+shapiro.test(y)
+```
+
+According to this test, there is no statistical evidence to reject the hypothesis of normality of the data, therefore, for a more detailed analysis the model adjusted in the period of 2015 can be obtained as follows:
+
+```{r}
+(fit <- tslm(y ~ trend, data = y) ) %>% summary()
+```
+
+With the model saved in the `fit` object, its information will be increased in the graph of the 2015 regression to facilitate the understanding of the results:
+
+```{r}
+g1 <- 
+  base %>%
+  select(id,  data_inversa, causa_acidente, tipo_acidente) %>% 
+  group_by(data_inversa=floor_date(data_inversa, "1 month")) %>% 
+  dplyr::summarise(n=n()) %>%
+  ggplot(aes(x=data_inversa, y=n)) +
+  geom_line() +
+  theme_bw() +
+  labs(y= 'Number of accidents',
+       x = 'Date',
+       subtitle = "By day", 
+       title= 'Number of accidents in the Rio-Niterói bridge', 
+       caption = "Data source:\nhttp://glo.bo/210j8gF\nhttps://www.prf.gov.br/portal/dados-abertos/acidentes\nhttps://gomesfellipe.github.io/") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(breaks=seq(0,100,25))
+
+t <- 
+  fit %>%
+  tidy() %>% 
+  bind_cols(r2=c(glance(fit)[[1]] %>% round(4),"-"),
+        confint_tidy(fit)) %>% 
+  mutate_if(is.numeric,~ round(.x,4)) %>% 
+  mutate(term = c("Intercetp", "Trend")) %>% 
+  set_names(c("Coef.", "Estimativa", "Erro Padrão", "Estatística", "Valor P", "R²","Lim. Inf.", "Lim. Sup.")) 
+
+# aux function
+g <- tableGrob(t,rows = NULL)
+find_cell <- function(table, row, col, name="core-fg"){
+# Source: 
+# https://cran.r-project.org/web/packages/gridExtra/vignettes/tableGrob.html
+  l <- table$layout
+  which(l$t==row & l$l==col & l$name==name)
+}
+
+ind <- find_cell(g, 3, 2, "core-bg")
+g$grobs[ind][[1]][["gp"]] <- gpar(fill="darkolivegreen1", col = "darkolivegreen4", lwd=5)
+
+g1 +
+  scale_x_date(date_breaks = '1 months',
+               limits = as.Date(c("2015-01-01","2015-12-01")),
+               expand = c(0.01,0.01)) +
+  geom_smooth(data=to_lm, aes(x=data_inversa, y=n), method = "lm",col="red",se=F)+
+  annotation_custom(grob = g  , ymax=220,xmin=as.Date("2015-04-01"))
+```
+
+Note that the estimated coefficient to determine the variation in the number of accidents by increasing the explanatory variable `trend` in one unit is significantly present, meaning that there seems to be a statistically significant linear relationship between the month of observation and the response variable.
+
+In addition, it is possible to note that for each increase of a `trend` unit (that is, over the course of 1 month), the expected value in the number of accidents observed in that month decreases by approximately `r -round(fit$coefficients[2],4)`.
+
+As `r round(fit$coefficients[2],4)` x 12 = `r round(fit$coefficients[2]*12,4)` then the number of expected accidents decreases to approximately `r -round(fit$coefficients[2]*12,2)`% of the original value as the variable tred increased by 12 units (in 1 year).
+
+See the result for the Shapiro - wilk test to evaluate the hypothesis of normality of the model residues, the standardized residues (quotient between the residue and the estimate of its standard deviation) and the [*studentized*](https://en.wikipedia.org/wiki/Studentized_residual) residues, which take into account the $h$ ([leverage](https://en.wikipedia.org/wiki/Leverage_(statistics) measure) in your measure:
+
+```{r}
+bind_cols(
+residuals = fit$residuals,
+rstandard = rstandard(fit),
+rstudent = rstudent(fit)
+) %>%
+  map_dbl(~shapiro.test(.x)$p.value)  %>%
+  tidy() %>% 
+  set_names(c("measure", "p value")) %>% 
+  kable(escape = F) %>%
+  kable_styling("hover",full_width = F)
+```
+
+There is no evidence to reject the hypothesis that model residues and standardized residues follow normal distribution. For the studentized residues, the normality hypothesis is rejected and as the R² value was not very high (63.17%), indicating that the adjusted line partially explains the variation of the data so it may be interesting to study in more detail what was the influence of the number of accidents in each month in the adjustment of the model calculating the means of influence for each observation of the model.
+
+An observation is considered influential if its exclusion in the adjustment of the regression model causes a substantial change in the regression analysis and to identify these observations, the same measures used in the post I made about [R Packages will be used to evaluate the adjustment of models](https://gomesfellipe.github.io/post/2017-12-24-diagnostico-de-modelo/diagnostico-de-modelos/).
+
+Visually and with measures of influence of the observed value for each month in the adjustment of the model:
+
+```{r}
+t1  <- influence.measures(fit) %$%
+  infmat %>% 
+  as_tibble() %>% 
+  map_df(~.x %>% round(4)) %>% 
+  mutate(mes = 1:12) %>% 
+  select(mes,everything()) %>% 
+  set_names(c("Month","DF β1","DF β2","	DFFit","	CovRatio","	D.Cook","	h"))
+
+g   <- tableGrob(t1,rows = NULL)
+
+ind <- map_dbl(1:7, ~find_cell(g, 6, .x, "core-bg"))  
+
+walk(ind, function(i) g$grobs[i][[1]][["gp"]] <<-
+       gpar(fill = "darkolivegreen1", col = "darkolivegreen1", lwd = 5)
+     )
+
+grid.arrange(g)
+```
+
+The table presents a summary of the influence measures for each variable, according to Cordeiro and Demétrio (2008):
+
+* **DF Beta**: Change in the estimated vector β when removing the i-th point of the analysis
+* **DF Fit**: Change caused by the adjusted value by withdrawing observation i
+CovRatio: Expresses the covariance relationship
+* **D.Cook**: Measure of departure from estimates when removing i and also considers internally studentized waste
+* **h**: Diagonal elements of matrix H
+
+It is possible to notice that in month 5 (May) it was the month that would provoke the biggest change provoked in the adjusted value after its withdrawal. Another important measure is [Cook's Distance](https://pt.wikipedia.org/wiki/Distância_de_Cook), which indicates how atypical the $i$ observation presents in the adjustment of the model, combining studentized residuals and leverage measures, making it possible to examine observations that greatly influence parameter estimates.
+
+In general, if $D_i > 1$ the point is excessively influential but as in general the observations had a value much lower than 1 so the elimination of any of these variables will not substantially change the parameter estimates however we can **examine** any observations whose $D_i$ much higher than the other estimated values for $D_i$ more carefully to understand what was its influence on the adjustment of the model:
+
+```{r}
+fit %>% 
+  broom::augment() %>% 
+  mutate(col = if_else(.resid==max(.resid), T, F))%>%
+  mutate(trend = factor(months(base$data_inversa) %>% unique,
+                        levels = months(base$data_inversa) %>% unique) ) %>% 
+  ggplot(aes(x=trend,y=.resid,col=col,label=trend)) +
+  geom_point() +
+  geom_label(vjust = -0.25) +
+  theme_bw() +
+  scale_y_continuous(limits=c(-20,35),breaks = seq(-20,35,5)) +
+  scale_color_manual(values=c("black", "red")) +
+  geom_hline(yintercept = 0,linetype="dashed",col="red") +
+  theme(legend.position="none") +
+  labs(y="Resíduos", x="Valores ajustados", title="Resíduos vs Ajuste")
+```
+
+In fact, the adjusted value for the largest month is very different from the actual observed value, which implies that there was an atypical behavior that can be confirmed by returning to the time series chart and seeing a different behavior (the number of accidents increased in relation to the previous one) and running away from the general trend of the data.
+
+# Next Steps ![](https://upload.wikimedia.org/wikipedia/commons/thumb/e/e5/Toicon-icon-lines-and-angles-think.svg/2000px-Toicon-icon-lines-and-angles-think.svg.png){width=2%}
+
+One of the other ideas I had to analyze this data as I proceeded with the study was to cross them with the flow of cars on the bridge to get an idea of proportion, but this idea remains as a suggestion for those who are also curious about this subject because the The intention of this post is to make an introductory analysis to show how it is possible to gain insights through the data using Statistics.
+
+In addition, I would like to encourage all people who like data and have doubts about life issues, the universe and everything to always look for answers but be very careful when drawing conclusions! This, for example, was an introductory and descriptive study and obviously there are a lot of other ways to study this data and as we are facing so much abundance, one question is enough that the investigation can be started and if we always have the answer for everything our brain never goes into "search mode". It is important to always question answers!
+
+# References
+
+G1 news: Monitoramento com câmeras ajuda a reduzir acidentes na Ponte Rio-Niterói
+
+Conceição Franco, Glaura da. 2016. APOSTILA de Modelos Lineares Em Séries Temporais. Belo Horizonte MG: <ftp://est.ufmg.br/pub/glaura/MLST/Modelos%20Lineares%20em%20S%E9ries%20Temporais.pdf>; UNIVERSIDADE FEDERAL DE MINAS GERAIS - UFMG.
+
+Cordeiro, Gauss Moutinho, and Clarice G.B. Demétrio. 2008. Modelos Lineares Generalizados E Extensões. <http://www.ufjf.br/clecio_ferreira/files/2013/05/Livro-Gauss-e-Clarice.pdf>; UFJF.
+
+Morettin, Pedro A., and Célia M. C. Toloi. 2004. Análise de Séries Temporais. São Paulo: <https://impa.br/wp-content/uploads/2017/04/13_CBM_81_01.pdf>; Editora Edgard Blücher Ltda.
